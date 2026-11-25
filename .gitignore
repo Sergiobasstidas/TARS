@@ -1,0 +1,232 @@
+# AEC disabled marker (created by aec=remove)
+.aec_disabled
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.claude/settings.local.json
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+pdm.lock
+.pdm.toml
+.pdm-python
+.pdm-build/
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+.idea/
+
+# Notes
+*.md
+
+# LLM and Vision Files
+llm/
+vision/
+config.ini
+config_backup.ini
+config-server.ini
+src/models/
+src/logs/
+# Memory files
+*.pickle.gz
+TARS.wav
+src/memory/flashrank_cache
+src/memory/*.png
+TARS_topics.json
+TARS_lite.json
+initial_memory.loaded
+initial_memory.json
+voice_memory.json
+voice_memory.json.bak
+last_prompt.txt
+pi_version
+interaction_log.json
+reminders.json
+scheduled_tasks.json
+
+# State files (UI preferences, terminal log)
+src/modules/UI/ui_settings.json
+src/memory/terminal_log_*.json
+
+# Character Data & Personas
+*persona.ini
+persona*
+
+# Claude & To-Do files
+.claude
+CLAUDE.md
+todo*.md
+
+# UI & Misc
+/src/modules/UI/pictures/*
+dashboard.ini
+
+# ONNX Models (hosted on Hugging Face)
+*.onnx
+*.onnx.json
+
+# Speech-to-text (STT) Folder
+stt/
+!stt/hey-tars_en_raspberry-pi_v4_0_0.ppn
+src/tts/kokoro*
+src/tts/cache/
+src/tts/*_templates.pkl
+src/tts/*_model.pkl
+
+# Character Image Exceptions
+src/character/**
+!src/character/TARS/
+!src/character/TARS/**
+!src/character/KIPP/
+!src/character/KIPP/**
+!src/character/CASE/
+!src/character/CASE/**
+!src/character/PLEX/
+!src/character/PLEX/**
+!src/character/Bishop/
+!src/character/Bishop/**
+# Re-ignore voice models (downloaded from HuggingFace at runtime)
+src/character/*/voice/*.onnx
+
+tarsdiscordbot/
+src/memory/prompt_history/
+terminal_log.json
+emotional_state.json
+ui_settings.json
+*interaction_log.json
+
+# TARS-AI Server
+TARS-AI_Server/models/*
+TARS-AI_Server/tts/*
+TARS-AI_Server/bin/*
+TARS-AI_Server/output/*
+TARS-AI_Server/outputs/*

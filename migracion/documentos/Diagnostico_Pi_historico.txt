@@ -1,0 +1,172 @@
+sergio@tars:~ $ hostnamectl
+cat /etc/os-release
+uname -a
+vcgencmd measure_temp
+vcgencmd get_throttled
+free -h
+df -h /
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS
+uptime
+ip -br addr
+iw dev wlan0 link
+rfkill list
+systemctl is-active ssh
+systemctl --failed
+python3 --version
+lsusb
+lspci -nnk
+lsmod
+rpi-eeprom-update
+cat /sys/class/thermal/cooling_device0/type
+cat /sys/class/thermal/cooling_device0/cur_state
+sudo dmesg --level=err,warn
+ Static hostname: tars
+       Icon name: computer
+[IDENTIFICADOR ÚNICO OMITIDO]
+[IDENTIFICADOR ÚNICO OMITIDO]
+Operating System: Debian GNU/Linux 13 (trixie)    
+          Kernel: Linux 6.18.34+rpt-rpi-2712
+    Architecture: arm64
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+DEBIAN_VERSION_FULL=13.5
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+Linux tars 6.18.34+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.18.34-1+rpt1 (2026-06-09) aarch64 GNU/Linux
+temp=33.4'C
+throttled=0x0
+               total        used        free      shared  buff/cache   available
+Mem:           7.9Gi       269Mi       7.2Gi        13Mi       548Mi       7.6Gi
+Swap:          2.0Gi          0B       2.0Gi
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/mmcblk0p2  117G  2.1G  111G   2% /
+NAME          SIZE TYPE FSTYPE MOUNTPOINTS
+loop0         148M loop swap   
+mmcblk0     119.2G disk        
+|-mmcblk0p1   512M part vfat   /boot/firmware
+`-mmcblk0p2 118.7G part ext4   /
+zram0           2G disk swap   [SWAP]
+ [IPv6 OMITIDA] up 7 min,  1 user,  load average: 0.01, 0.10, 0.07
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+eth0             DOWN           
+wlan0            UP             192.168.0.15/24 [IPv6 OMITIDA] fe80::[IPv6 OMITIDA] 
+Connected to [MAC OMITIDA] (on wlan0)
+	SSID: Sergio
+	freq: 2437.0
+	RX: 30870835 bytes (20458 packets)
+	TX: 691386 bytes (7073 packets)
+	signal: -58 dBm
+	rx bitrate: 58.5 MBit/s
+	tx bitrate: 72.2 MBit/s
+	bss flags: short-slot-time
+	dtim period: 1
+	beacon int: 100
+0: hci0: Bluetooth
+	Soft blocked: no
+	Hard blocked: no
+1: phy0: Wireless LAN
+	Soft blocked: no
+	Hard blocked: no
+active
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+
+0 loaded units listed.
+Python 3.13.5
+Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 003 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+Bus 004 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+[IPv6 OMITIDA].0 PCI bridge [0604]: Broadcom Inc. and subsidiaries BCM2712 PCIe Bridge [14e4:2712] (rev 30)
+	Kernel driver in use: pcieport
+[IPv6 OMITIDA].0 Ethernet controller [0200]: Raspberry Pi Ltd RP1 PCIe 2.0 South Bridge [1de4:0001]
+	Kernel driver in use: rp1
+Module                  Size  Used by
+rfcomm                 81920  2
+algif_hash             49152  1
+algif_skcipher         49152  1
+af_alg                 49152  6 algif_hash,algif_skcipher
+bnep                   49152  2
+vc4                   442368  4
+snd_soc_hdmi_codec     49152  2
+drm_exec               49152  1 vc4
+drm_display_helper     49152  1 vc4
+brcmfmac_cyw           49152  0
+binfmt_misc            49152  1
+brcmfmac              393216  1 brcmfmac_cyw
+cec                    65536  1 vc4
+hci_uart               65536  0
+brcmutil               49152  1 brcmfmac
+drm_dma_helper         49152  1 vc4
+drm_client_lib         49152  1 vc4
+btbcm                  49152  1 hci_uart
+bluetooth             704512  27 hci_uart,btbcm,bnep,rfcomm
+snd_soc_core          327680  2 vc4,snd_soc_hdmi_codec
+snd_compress           49152  1 snd_soc_core
+cfg80211             1114112  2 brcmfmac_cyw,brcmfmac
+aes_ce_blk             49152  4
+pisp_be                49152  0
+aes_ce_cipher          49152  1 aes_ce_blk
+rpi_hevc_dec           65536  0
+ghash_ce               49152  0
+snd_pcm_dmaengine      49152  1 snd_soc_core
+snd_pcm               180224  4 snd_soc_hdmi_codec,snd_compress,snd_soc_core,snd_pcm_dmaengine
+v4l2_mem2mem           65536  1 rpi_hevc_dec
+videobuf2_dma_contig    49152  2 pisp_be,rpi_hevc_dec
+ecdh_generic           49152  2 bluetooth
+gf128mul               49152  1 ghash_ce
+videobuf2_memops       49152  1 videobuf2_dma_contig
+snd_timer              81920  1 snd_pcm
+ecc                    65536  1 ecdh_generic
+videobuf2_v4l2         49152  3 pisp_be,rpi_hevc_dec,v4l2_mem2mem
+rfkill                 49152  6 bluetooth,cfg80211
+snd                   163840  5 snd_soc_hdmi_codec,snd_timer,snd_compress,snd_soc_core,snd_pcm
+raspberrypi_hwmon      49152  0
+videodev              344064  4 pisp_be,rpi_hevc_dec,videobuf2_v4l2,v4l2_mem2mem
+v3d                   212992  0
+videobuf2_common       98304  6 pisp_be,rpi_hevc_dec,videobuf2_dma_contig,videobuf2_v4l2,v4l2_mem2mem,videobuf2_memops
+gpu_sched              98304  1 v3d
+drm_shmem_helper       49152  1 v3d
+drm_kms_helper        245760  4 drm_dma_helper,vc4,drm_shmem_helper,drm_client_lib
+mc                     81920  6 videodev,pisp_be,rpi_hevc_dec,videobuf2_v4l2,videobuf2_common,v4l2_mem2mem
+pwm_fan                49152  0
+raspberrypi_gpiomem    49152  0
+rp1_pio                65536  0
+rp1_fw                 49152  1 rp1_pio
+rp1_adc                49152  0
+sch_fq_codel           49152  3
+zram                   65536  1
+drm                   737280  10 gpu_sched,drm_kms_helper,drm_exec,drm_dma_helper,v3d,vc4,drm_shmem_helper,drm_display_helper,drm_client_lib
+lz4_compress           49152  1 zram
+drm_panel_orientation_quirks    65536  1 drm
+fuse                  229376  1
+backlight              49152  2 drm_kms_helper,drm
+nfnetlink              49152  1
+ipv6                  622592  46
+libsha1                65536  1 ipv6
+rp1_mailbox            49152  1
+i2c_brcmstb            49152  0
+nvmem_rmem             49152  0
+gpio_keys              49152  0
+*** UPDATE AVAILABLE ***
+
+Run "sudo rpi-eeprom-update -a" to install this update now.
+
+To configure the bootloader update policy run "sudo raspi-config"
+
+BOOTLOADER: update available
+   CURRENT: Wed Jan 21 [IPv6 OMITIDA] UTC 2026 (1769002727)
+    LATEST: Tue May 26 [IPv6 OMITIDA] UTC 2026 (1779807685)
+   RELEASE: default (/usr/lib/firmware/raspberrypi/bootloader-2712/default)
+            Use raspi-config to change the release.
+pwm-fan
+0
+[    2.695015] systemd[1]: Failed to populate /etc with preset unit settings, ignoring: Read-only file system
+[    3.847195] hci_uart_bcm serial0-0: supply vbat not found, using dummy regulator
+[    3.847241] hci_uart_bcm serial0-0: supply vddio not found, using dummy regulator
+[    8.371520] raspberrypi-firmware soc@107c000000:firmware: Request 0x00030097 returned status 0x80000001
+sergio@tars:~ $ 

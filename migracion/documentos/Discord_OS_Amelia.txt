@@ -1,0 +1,260 @@
+Atomik — 21/3/26, 23:03
+@everyone
+Imagen
+🚀 TARS-AI — OS Amelia Release
+
+Big one.
+
+We’re releasing a major architectural upgrade focused on modularity, real-time interaction, and expanding TARS into a more flexible, system-driven platform.
+
+This release marks a major step forward for TARS, and honestly, it wouldn’t exist in this form without some key people.
+
+First and foremost — huge thanks to pyrater. A massive amount of what you’re about to see was shaped, pushed, and refined through his work, ideas, and persistence. This release carries a lot of that influence.
+
+Also a big thank you to latisha for the support and contributions.
+
+—
+
+OS Amelia is a milestone release.
+It’s not just features — it’s a shift in architecture, flexibility, and how TARS evolves going forward.
+
+More modular. More responsive. More alive.
+
+Full changes below 👇
+.
+.
+.
+. 
+🤖 TARS-AI — OS Amelia Changelog 🚀
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ OS Amelia — Major Milestone
+Large architectural update bringing Pi layer compatibility, face recognition groundwork, app system, and screensaver restructuring.
+
+🔌 Skills Plugin System
+The old ~530-line if-elif chain is gone. Skills are now auto-discovered plugins.
+Each tool is a standalone skill_*.py file in src/skills/ — drop a file in, restart, it works
+Each skill exports a SKILL dict (name + LLM prompt definition + optional examples) and an execute() function
+Skill prompt definitions and few-shot examples are dynamically injected into the system prompt
+19 skills: web_search capture_camera_view take_photo execute_movement generate_image adjust_persona identify_speaker_name volume browser home_assistant system_control launch_retropie reminder discord sandbox_exec network_camera generate_music tars_radio example
+Multi-skill fix: multiple skills in one turn now join replies instead of overwriting
+module_engine.py FUNCTION_REGISTRY removed entirely
+🎙️ Streaming LLM + Sentence TTS Pipeline
+TARS now speaks after the first sentence instead of waiting for the full reply.
+SentenceTTSPipeline splits tokens at sentence boundaries (min 20 chars, min clause 12 chars)
+Voice mode and web UI share the same pipeline backend
+Device speakers and web browser play in parallel with LLM generation
+Real-time tokens stream in the web UI as they're generated
+Follow-up message fix: web search and tools now emit and speak the updated text correctly
+
+👤 Speaker ID — Full Rewrite
+Three-tier threshold model: consistency (0.55) → soft match (0.65) → high-confidence (0.75)
+Atomic saves: writes temp file then renames to prevent corruption
+Auto-merge duplicate unknown profiles; real names in memory/prompts (no more unknown)
+wait_for_identification() waits up to 2.0s for speaker ID before displaying user message
+Deferred name correction: UI message bubble updates via socket event after identification
+Barge-in fix: TARS's own TTS no longer poisons speaker detection
+Browser mic audio submitted to speaker ID for web voice mode
+Default threshold raised from 0.5 → 0.75
+📊 Dashboard Tab (New in Web UI)
+5 sub-tabs backed by full interaction logging via module_dashboard_data.py:
+📈 Graph — D3.js memory/knowledge graph with detail drawer
+😄 Mood — Emotion bar chart, timeline, activity heatmap (half-life decay for radar chart)
+📋 Log — Interaction audit trail with timestamp, emotion, speaker
+🗂️ Topics — Topic extraction table and network graph
+🧠 Prompt — Full prompt debugger with expand/collapse
+
+⏰ Heartbeat System & Reminder Skill
+New module_heartbeat.py lightweight scheduler for one-shot and recurring timed tasks
+skill_reminder.py — set reminders via voice/text: "remind me in 10 minutes to…"
+Reminders survive restarts via task persistence
+
+🧬 Identity Coordinator (module_identity.py)
+Fuses voice ID and face recognition into one unified identity context
+Voice is authoritative; falls back to face recognition if exactly one known person is visible
+Unified get_identity_context() injected into prompts
+module_speaker_id.py and face recognition both feed into it
+🔔 Atomik Wake Word — CNN/ONNX + Multi-Gate Pipeline
+Full rewrite from template matching to a dual-mode architecture.
+
+Template mode (cosine similarity — recommended default):
+Records 5 template utterances during setup, augmented with time-stretch, pitch-shift, gain variation, noise
+MFCC cosine similarity matching — most reliable for custom wake words out of the box
+
+Model mode (CNN/ONNX neural network):
+Pre-trained ONNX model from tts/{wake_word}.onnx
+TinyClassifier — pure-numpy 1D CNN with Adam optimizer, trained on-device as fallback
+5-gate pre-filter: energy, adaptive SNR, crest factor, spectral speech band, low-freq rejection
+Confirmation window (2 above-threshold scores in 5 checks) + post-detection _is_speech_like() validation
+MFCC + delta + delta-delta features (39 channels)
+Synthetic negative audio generation for training (40 clips: white/pink noise, babble, tonal, rumble, clicks)
+
+Config: atomik_mode = auto | model | template
+🚪 Wake Word Gates
+Post-detection gates applied to all wake word backends (atomik, sherpa-onnx, fastrtc).
+🗣️ Speaker Verify (vad_speaker_verify) — match voice against enrolled speakers; modes: off / any / specific name. Uses lower threshold (0.60) than normal speaker ID (0.75)
+👁️ Presence Gate (vad_presence_gate) — require a face on camera; modes: off / any / known
+📝 Transcript Verify (vad_transcript_verify) — confirm wake word was actually spoken via STT with exact + fuzzy matching
+All gates optional, disabled by default, run synchronously before triggering wake callback
+
+⚙️ New Infrastructure Modules
+module_mic.py (~561 lines) — Shared mic utilities, native sample rate detection, _AudioHub singleton for shared mic access
+module_router.py (~186 lines) — Message routing, tracks voice/webui/Discord interaction target
+module_state.py (~92 lines) — Thread-safe state machine: BOOTING → STANDBY → LISTENING → THINKING → TALKING
+Audio output autodetection (module_tts.py) — Discovers and selects correct audio output at startup. Prioritizes USB > hardware > virtual ALSA, skips HDMI outputs
+🍓 Raspberry Pi Zero 2 W Support
+First release with full Pi Zero 2 W support — a low-cost ($15) entry point for TARS-AI.
+New PIZERO2 device profile with tailored capability gating
+Cloud-only backends: OpenAI STT, cloud TTS (ElevenLabs, OpenAI), cloud LLM
+Lite keyword-based memory (no embeddings, no vector search)
+Minimal dependency footprint (~300MB vs ~2.5GB on Pi5)
+Auto-detected via /proc/device-tree/model at runtime
+Graceful degradation: features requiring more compute are automatically disabled
+
+🆕 New Skill Plugins
+skill_discord.py (~248 lines) — Discord bot integration, replaces module_discord.py
+skill_sandbox_exec.py (~314 lines) — Sandboxed code execution
+skill_network_camera.py (~436 lines) — Network camera access
+skill_generate_music.py (~411 lines) — Music generation
+skill_tars_radio.py (~1,029 lines) — TARS radio functionality
+skill_example.py (~110 lines) — Example/template skill for reference
+
+📦 Modules Inlined or Removed
+module_engine.py — Deleted (dead code) • module_secrets.py — Deleted
+module_browser.py — Inlined into skill_browser.py
+module_volume.py — Inlined into skill_volume.py
+module_discord.py — Replaced by skill_discord.py
+module_homeassistant.py — Inlined into skill_home_assistant.py
+🌐 Web UI — Browser Voice Mode
+Web Audio API captures mic at 16kHz, sent via SocketIO browser_audio event
+Local sherpa-onnx transcription + OpenAI Whisper fallback
+RMS silence rejection filters empty audio
+Bot replies stream as tokens (bot_token) + audio chunks (bot_audio_chunk)
+ChunkedAudioPlayer handles queue-based playback with barge-in
+
+🎨 Web UI — Themes
+15 CSS themes, auto-discovered from src/www/static/css/themes/:
+arctic chatgpt claude cyberpunk default gemini gi_joe glados grogu grok hal9000 linux microsoft retro starwars
+Selectable via [ACCESS] webui_theme in config.ini
+
+🔒 Web UI — Login Auth
+Password-protected interface with session-based auth via flask.session
+Random initial password generated on first install
+Flask secret key randomized (was hardcoded — auth bypass fixed)
+Emotions endpoint XSS-hardened
+🖥️ Web UI — New Tabs & Controls
+🦾 Body — Combined arm/leg servo sliders with live range controls
+📶 WiFi — Network scan, connect/disconnect, hotspot toggle (TARS-Setup AP)
+⚙️ SYS (Nexus) — Real-time CPU%, RAM%, temp, battery + live console logs
+🧩 Character Editor — Edit personas directly in the browser
+🕹️ Motion D-pad — Walk/turn controls with fast/slow speed toggle
+Avatar hide/show toggle; configurable port (default 80, was hardcoded)
+
+🌍 Remote Access
+Cloudflared tunnel with QR code — manual enable per session, no auto-start
+Tailscale integration for secure remote access without port forwarding
+
+🖼️ ComfyUI Image Generation
+Workflow injection via JSON template; separate txt2img and img2img workflows
+Polls /history/{prompt_id} for completion; config: comfyui_workflow, comfyui_img2img_workflow
+OpenAI DALL-E fallback if ComfyUI unavailable
+
+👁️ Vision Backends — Now 4 Options
+blip (local, int8 quantized) · llm (generic OpenAI-compatible) · openai (GPT-4o-mini) · external/server_hosted
+Light ring camera option added for dark rooms.
+📡 App-Server Overhaul
+Expanded from basic BLIP/Whisper server to full FastAPI companion:
+STT — faster-whisper + Silero VAD, WebSocket streaming
+TTS — Piper ONNX with caching
+LLM — transformers (Qwen3 etc.) with torch.compile, static KV cache, bitsandbytes quantization
+Vision — BLIP and vision-capable LLM
+ImageGen — diffusers (SDXL, SD1.5)
+MusicGen — ACE-Step text-to-music with vocals/lyrics; configurable duration, steps, CFG, scheduler
+Embeddings — sentence-transformers (OpenAI-compatible endpoint)
+Model management API: load/unload/reload per service
+Browser-based settings UI and API playground with dedicated tabs per service (including Music Gen)
+Optional API key authentication
+
+⚙️ Config Management
+app_cms.py handles field migrations between sections
+Dynamic config form in web UI (type hints, validation, comments surfaced)
+get_config_sync_status() API for web UI sync check
+New keys: webui_theme, emotion_method (classifier vs llm)
+👀 Eyes App (module_app_eyes.py)
+16 mood states with expressive animations
+Touch reactions: poke left/right, boop nose, forehead tap, chin tap, face poke, dizzy (5 rapid taps)
+WiFi icon in bottom toolbar and Eyes HUD; all 16 emotions wired to emotion detection
+
+🕐 Clock App — Standalone clock display for the on-device display
+🎞️ None Background Animation Mode — Disable background animations entirely for reduced CPU on lower-spec devices
+🐟 Aquarium Screensaver — New animated screensaver with swimming fish
+
+📶 WiFi Manager (module_wifi.py)
+Network scanning, WPA/WPA2 and Enterprise (PEAP/MSCHAPv2) connections
+Hotspot: TARS-Setup AP, IP 10.42.0.1, password [VALOR OMITIDO]
+Background daemon thread — non-blocking boot; Web UI tab for network management
+🗑️ Removed Backends
+Picovoice wake word → replaced by atomik + sherpa-onnx
+Vosk STT → replaced by sherpa-onnx
+faster-whisper (Pi-side) → offloaded to app-server
+Ooba / Tabby LLM backends → use other (OpenAI-compatible) instead
+AllTalk TTS → use external instead
+Azure Speech TTS, MiniMax TTS → removed
+module_engine.py, module_secrets.py, src/engine/ folder → deleted
+🐛 Bug Fixes
+Voice mode deadlock on uploaded photo and blocking function calls — fixed
+Web search follow-up audio now speaks updated text, not original placeholder
+TARS's own TTS no longer triggers barge-in via speaker bleed
+Port 80 without root: cap_net_bind_service replaces requiring sudo
+Flask secret key hardcoding (auth bypass) — fixed
+Speaker ID voice poisoning: pre-roll audio chunks excluded from embeddings
+WiFi manager no longer blocks Flask startup
+Terminal mode crash: UIManager stub now implements all required interfaces
+Android WebUI touch/audio fixes
+ALSA InputStream wrapped with retry on transient errors
+LLM-hallucinated identify_speaker_name calls filtered when name already known
+Multi-skill reply overwrite — replies now joined, not last-wins
+Memory directory uses absolute paths — fixes launch-from-wrong-dir issues
+XSS: Jinja2 templates use tojson/|e escaping; sprite path sanitized against path traversal
+Missing ONNX wake word model file now handled gracefully
+CMS properly preserves skill config sections
+Pictures screensaver file path resolution fixed
+Memory lite embedding prefetch crash fixed
+🔒 Security Improvements
+Randomized Flask session secret key (was hardcoded)
+Random initial webui_password on first install
+Cloudflared tunnel requires manual enable per session — no auto-start
+Emotions endpoint hardened against XSS
+Sprite path sanitized to prevent path traversal
+
+⚡ Performance Improvements
+Streaming TTS: first audio plays after sentence 1, not full response (~2–4s improvement)
+module_speed.py: 12+ timing metrics per round (time-to-first-token, time-to-first-audio, tool latency, etc.)
+Preemptive LLM: fired during detected silence window to reduce perceived latency
+Smart Turn VAD: ML-based end-of-speech detection replaces fixed-delay RMS threshold
+torch.compile on app-server: LLM inference compiled with reduce-overhead mode
+Static KV cache: CUDA graph optimization for repeated LLM inference on server
+Auto-hide cursor: hides after 2 seconds of inactivity on display
+HTTP session reuse: persistent requests.Session saves 100–200ms per LLM request (avoids TLS re-handshake)
+Smart Turn inference caching: prevents redundant semantic turn inference on identical audio
+Non-blocking speaker ID: deferred to end of prompt building to avoid blocking STT pipeline
+Eager-load embedding model: pre-loads sentence-transformers at startup for faster first memory query
+Audio output autodetection: selects best output device (USB > hardware > virtual), skips HDMI
+Atomik — 21/3/26, 23:12
+If you're already using V3 hardware, you don't need to do anything special — just update the software.
+
+To update:
+Open a terminal in your TARS-AI folder
+Run: git pull
+Then run: ./Install.sh
+
+If you've modified files locally: git pull might fail. If you're okay discarding local edits, reset to latest:
+git reset --hard
+git pull
+
+⚠️ This will delete any local changes. Make a backup first if you want to keep them.
+https://www.youtube.com/watch?v=dHhtM27bSIQ&t=40s
+YouTube
+atomikspace
+TARS-AI just got a massive update — and we're calling it OS Amelia.
+Imagen
+https://www.youtube.com/watch?v=JIi4CV05Ufs&t=37s
