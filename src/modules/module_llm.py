@@ -259,11 +259,18 @@ def _prepare_request_data(llm_backend, prompt, image_b64=None):
             {"role": "system", "content": CONFIG['LLM']['systemprompt']},
             {"role": "user", "content": user_content}
         ],
-        "max_tokens": CONFIG['LLM']['max_tokens'],
-        "temperature": CONFIG['LLM']['temperature'],
-        "top_p": CONFIG['LLM']['top_p'],
         "stream": True
     }
+
+    # GPT-5.6 uses max_completion_tokens and only supports its default
+    # sampling values. Keep the original OpenAI-compatible payload for every
+    # other model/backend.
+    if llm_backend == "openai" and model.startswith("gpt-5.6"):
+        data["max_completion_tokens"] = CONFIG['LLM']['max_tokens']
+    else:
+        data["max_tokens"] = CONFIG['LLM']['max_tokens']
+        data["temperature"] = CONFIG['LLM']['temperature']
+        data["top_p"] = CONFIG['LLM']['top_p']
 
     if llm_backend in ["openai", "grok", "deepinfra"]:
         data["response_format"] = {"type": "json_object"}

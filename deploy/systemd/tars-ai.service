@@ -1,0 +1,28 @@
+[Unit]
+Description=TARS-AI original voice assistant
+Wants=network-online.target
+After=network-online.target sound.target
+
+[Service]
+Type=simple
+User=sergio
+Group=sergio
+WorkingDirectory=/home/sergio/TARS-AI/src
+EnvironmentFile=/home/sergio/TARS-AI/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPYCACHEPREFIX=/tmp/tars-pycache
+Environment=SDL_AUDIODRIVER=dummy
+Environment=TARS_AUDIO_CARD=Device
+Environment=TARS_AUDIO_CONTROL=Speaker
+ExecStart=/home/sergio/TARS-AI/.venv/bin/python /home/sergio/TARS-AI/src/app.py show_ui=false speed=true
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/home/sergio/TARS-AI /tmp
+
+[Install]
+WantedBy=multi-user.target

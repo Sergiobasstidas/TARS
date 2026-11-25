@@ -1,0 +1,36 @@
+# Runtime original de TARS-AI para Raspberry Pi 5 sin cámara, pantalla ni servos.
+openai
+tiktoken
+numpy==2.1
+scipy
+soxr
+sounddevice
+soundfile
+pydub
+requests
+configobj
+python-dotenv
+joblib
+
+# Smart Turn y memoria original.
+onnxruntime
+# Silero speech/noise detection only; transcription remains on OpenAI.
+sherpa-onnx
+transformers
+bm25s
+pystemmer
+hyperdb-python
+flashrank
+
+# Los módulos originales importan estas bibliotecas aunque el hardware esté desactivado.
+adafruit-blinka
+adafruit-circuitpython-pca9685
+adafruit-circuitpython-ina260
+lgpio
+
+# WebUI original, usada para diagnóstico y configuración.
+flask
+flask-cors
+flask-socketio
+eventlet
+Pillow

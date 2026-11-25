@@ -1,6 +1,7 @@
 """Skill: capture_camera_view — Analyze what the camera sees."""
 
 import threading
+import sys
 
 _vision_lock = threading.Lock()
 _vision_active = False  # process-wide flag (not thread-local)
@@ -77,7 +78,11 @@ def execute(parameters, context):
     # Pull detection context from UI if available
     detection_context = ""
     try:
-        from modules.module_main import ui_manager
+        # Do not import module_main just to inspect optional UI state. In a
+        # validation/CLI process that import also initializes audio and servo
+        # modules. During the real app lifecycle it is already in sys.modules.
+        main_module = sys.modules.get("modules.module_main")
+        ui_manager = getattr(main_module, "ui_manager", None)
         if ui_manager and hasattr(ui_manager, 'detection_manager'):
             detection_context = ui_manager.detection_manager.get_detection_summary() or ""
     except Exception:
@@ -98,11 +103,17 @@ def execute(parameters, context):
                 prompt = query or "Describe what you see."
                 if detection_context:
                     prompt = f"{detection_context}\n\n{prompt}"
+                prompt = (
+                    "La imagen de la cámara ya está adjunta a este mensaje. "
+                    "Analízala directamente y responde la consulta visual; no "
+                    "vuelvas a llamar capture_camera_view ni inventes detalles.\n\n"
+                    f"Consulta: {prompt}"
+                )
                 reply = get_completion(prompt, image_b64=b64)
-                return reply if reply else "I tried to look but couldn't process the image."
+                return reply if reply else "Intenté mirar, pero no pude procesar la imagen."
             except Exception as e:
                 queue_message(f"ERROR: Single-pass vision failed: {e}")
-                return "I tried to look but encountered an error."
+                return "Intenté mirar, pero la cámara encontró un error."
         else:
             # Two-pass for caption-only backends (blip, server_hosted)
             if debug:
@@ -122,6 +133,6 @@ def execute(parameters, context):
                 except Exception as e:
                     queue_message(f"WARN: Vision follow-up LLM call failed: {e}")
                     return description
-            return "I tried to look but couldn't process the image."
+            return "Intenté mirar, pero no pude procesar la imagen."
     finally:
         _vision_active = False

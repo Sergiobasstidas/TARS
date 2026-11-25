@@ -397,6 +397,9 @@ def load_config():
         "STT": {
             "use_indicators": config.getboolean('STT', 'use_indicators'),
             "stt_processor": config['STT']['stt_processor'],
+            "openai_stt_model": config.get(
+                'STT', 'openai_stt_model', fallback='whisper-1'
+            ),
             "language": config['STT']['language'],
             "external_url": config['STT']['external_url'],
             "sherpa_onnx_denoise": config.get('STT', 'sherpa_onnx_denoise', fallback='False'),
@@ -405,6 +408,12 @@ def load_config():
             "wake_word_processor": config['STT']['wake_word_processor'],
             "atomik_mode": config.get('STT', 'atomik_mode', fallback='auto'),
             "sensitivity": config['STT']['sensitivity'],
+            "atomik_energy_threshold": config.getfloat(
+                'STT', 'atomik_energy_threshold', fallback=0.008
+            ),
+            "atomik_similarity_threshold": config.get(
+                'STT', 'atomik_similarity_threshold', fallback=''
+            ),
             "vad_transcript_verify": config.get('STT', 'vad_transcript_verify', fallback='False'),
             "vad_presence_gate": config.get('STT', 'vad_presence_gate', fallback='off'),
             "vad_speaker_verify": config.get('STT', 'vad_speaker_verify', fallback='off'),
@@ -414,6 +423,12 @@ def load_config():
             "bargein_sensitivity": config.getint('STT', 'bargein_sensitivity', fallback=5),
             "vad_method": config['STT']['vad_method'],
             "speechdelay": int(config['STT']['speechdelay']),
+            "listen_timeout": config.getfloat(
+                'STT', 'listen_timeout', fallback=0.0
+            ),
+            "silence_timeout": config.getfloat(
+                'STT', 'silence_timeout', fallback=0.0
+            ),
             "speaker_id_enabled": config.get('STT', 'speaker_id_enabled', fallback='False'),
             "speaker_id_threshold": config.get('STT', 'speaker_id_threshold', fallback='0.75'),
             "mic_amp_gain": config.getfloat('STT', 'mic_amp_gain', fallback=10.0),
@@ -451,6 +466,11 @@ def load_config():
         "VISION": {
             "enabled": config.getboolean('VISION', 'enabled'),
             "camera_rotation": config.getint('VISION', 'camera_rotation', fallback=0),
+            "camera_backend": config.get('VISION', 'camera_backend', fallback='auto'),
+            "capture_width": config.getint('VISION', 'capture_width', fallback=1536),
+            "capture_height": config.getint('VISION', 'capture_height', fallback=864),
+            "capture_timeout_ms": config.getint('VISION', 'capture_timeout_ms', fallback=2500),
+            "capture_quality": config.getint('VISION', 'capture_quality', fallback=85),
             "vision_processor": config.get('VISION', 'vision_processor', fallback='blip'),
             "use_llm_backend": config.getboolean('VISION', 'use_llm_backend', fallback=True),
             "external": config.get('VISION', 'vision_processor', fallback='blip') == 'external',

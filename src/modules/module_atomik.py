@@ -455,6 +455,9 @@ class WakeWordSystem:
         self._confirmation_count = 2
         self._last_debug_time = 0
         self._peak_score_since_debug = 0.0
+        self.last_score = 0.0
+        self.last_detection_audio = None
+        self.last_detection_metrics = {}
         # Adaptive noise floor — tracks background noise level for SNR gating
         self._noise_floor = 0.005  # initial estimate
         self._noise_alpha = 0.02   # slow adaptation rate
@@ -477,20 +480,33 @@ class WakeWordSystem:
 
         recording = []
         speech_started = False
+        speech_candidate_frames = 0
+        min_speech_frames = 3
         silence_count = 0
         max_silence_frames = 15
+        pre_roll = deque(maxlen=int(self.sample_rate * 0.25))
 
         def callback(audio_chunk, frames, time_info, status):
-            nonlocal speech_started, silence_count
+            nonlocal speech_started, speech_candidate_frames, silence_count
+
+            is_speech = self.vad.is_speech(audio_chunk)
 
             if not speech_started:
-                if self.vad.is_speech(audio_chunk):
+                pre_roll.extend(audio_chunk)
+                if is_speech:
+                    speech_candidate_frames += 1
+                else:
+                    speech_candidate_frames = 0
+
+                # Require sustained speech so clicks and brief noise spikes do
+                # not consume a training round before the user starts talking.
+                if speech_candidate_frames >= min_speech_frames:
                     speech_started = True
                     print("   Recording...", end="", flush=True)
-                    recording.extend(audio_chunk)
+                    recording.extend(pre_roll)
             else:
                 recording.extend(audio_chunk)
-                if self.vad.is_speech(audio_chunk):
+                if is_speech:
                     silence_count = 0
                     print("\u2588", end="", flush=True)
                 else:
@@ -715,7 +731,7 @@ class WakeWordSystem:
 
     # --- Detection ---
 
-    def listenForWakeWord(self):
+    def listenForWakeWord(self, score_callback=None):
         detected_flag = False
 
         def audio_callback(audio_np, frames, time_info, status):
@@ -723,6 +739,11 @@ class WakeWordSystem:
             self.buffer.extend(audio_np)
 
             detected, confidence = self.detect()
+            if score_callback is not None:
+                try:
+                    score_callback(detected, confidence, self.last_detection_metrics)
+                except Exception:
+                    pass
             if detected:
                 detected_flag = True
 
@@ -763,6 +784,12 @@ class WakeWordSystem:
         # Bangs have very high peak relative to RMS. Speech is more uniform.
         peak = np.max(np.abs(audio_window))
         crest = peak / (rms + 1e-8)
+        self.last_detection_metrics = {
+            "rms": float(rms),
+            "peak": float(peak),
+            "crest": float(crest),
+            "snr": float(snr),
+        }
         if crest > 15:  # bangs/clicks typically > 15, speech < 10
             return False, 0.0
 
@@ -789,6 +816,7 @@ class WakeWordSystem:
 
         # Neural network inference - single forward pass
         score = self.model.predict(feat)
+        self.last_score = float(score)
 
         # Speed-variation retry: if score is close but below threshold,
         # try time-stretched versions to catch slightly faster/slower speech.
@@ -805,6 +833,7 @@ class WakeWordSystem:
                         score = retry_score
                         if score >= self.threshold:
                             break
+        self.last_score = float(score)
 
         # Confirmation window
         self._recent_scores.append(score)
@@ -824,6 +853,7 @@ class WakeWordSystem:
                 return False, score
 
             self.last_detection_time = time.time()
+            self.last_detection_audio = audio_window.copy()
             self._recent_scores.clear()
             if self.debug:
                 print(f"\r  [atomik] >>> WAKE WORD DETECTED ({score:.3f}) <<<                        ", flush=True)
@@ -897,7 +927,28 @@ class WakeWordSystem:
         self.last_check_time = time.time()
 
         audio_window = np.array(list(self.buffer)[-int(self.sample_rate):], dtype=np.float32)
-        if not self.vad.is_speech(audio_window[:1024]):
+
+        # Evaluate the complete one-second window.  The old implementation
+        # checked only audio_window[:1024] (the oldest 64 ms), so a correctly
+        # spoken wake word near the end of the window could be ignored while a
+        # transient at its beginning could pass the gate.
+        rms = float(np.sqrt(np.mean(audio_window ** 2)))
+        peak = float(np.max(np.abs(audio_window)))
+        crest = peak / (rms + 1e-8)
+        self.last_detection_metrics = {
+            "rms": rms,
+            "peak": peak,
+            "crest": crest,
+        }
+        if rms < self.vad.energy_threshold:
+            self._recent_scores.clear()
+            self.last_score = 0.0
+            return False, 0.0
+
+        # Reject short impulses such as keyboard clicks before comparing MFCCs.
+        if crest > 15:
+            self._recent_scores.clear()
+            self.last_score = 0.0
             return False, 0.0
 
         current_mfcc = self.mfcc_extractor.extract_mfcc(audio_window)
@@ -905,14 +956,27 @@ class WakeWordSystem:
             return False, 0.0
 
         max_sim = max(self.cosine_similarity(current_mfcc, t) for t in self.templates)
+        self.last_score = float(max_sim)
 
         if self.debug and max_sim > 0.1:
             filled = int(max_sim * 30)
             bar = "\u2588" * filled + "\u2591" * (30 - filled)
             print(f"\r  [atomik:tmpl] {bar} {max_sim:.3f}/{self.threshold:.3f}   ", end="", flush=True)
 
-        if max_sim >= self.threshold:
+        # Require a sustained match across two nearby checks.  A single loose
+        # cosine match is not enough, especially with custom short names.
+        self._recent_scores.append(max_sim)
+        above_count = sum(1 for score in self._recent_scores if score >= self.threshold)
+
+        if above_count >= self._confirmation_count:
+            if not self._is_speech_like(audio_window):
+                if self.debug:
+                    print(f"\r  [atomik:tmpl] rejected: not speech-like                                    ", flush=True)
+                self._recent_scores.clear()
+                return False, max_sim
             self.last_detection_time = time.time()
+            self.last_detection_audio = audio_window.copy()
+            self._recent_scores.clear()
             if self.debug:
                 print(f"\r  [atomik:tmpl] >>> WAKE WORD DETECTED ({max_sim:.3f}) <<<                  ", flush=True)
             return True, max_sim

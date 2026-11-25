@@ -11,6 +11,7 @@ voice command handling, and barge-in detection during TTS playback.
 import os
 import re
 import random
+import math
 import threading
 import time
 from collections import deque
@@ -34,6 +35,7 @@ from modules.module_messageQue import queue_message
 from modules.module_config import load_config, get_capabilities
 from modules.module_tts import is_tts_playing
 from modules.module_state import set_tars_state, get_tars_state, TarsState
+from modules import module_voice_trace as voice_trace
 
 CONFIG = load_config()
 CAPABILITIES = get_capabilities()
@@ -142,9 +144,11 @@ class STTManager:
 
     try:
         _resp = CONFIG["CHAR"]['responses']
-        if _resp and _resp.strip() and _resp.strip() != '[]':
+        if _resp and _resp.strip():
             _parsed = json.loads(_resp)
-            if isinstance(_parsed, list) and _parsed:
+            if isinstance(_parsed, list):
+                # An explicit [] means silent wake acknowledgement. Previously
+                # it accidentally restored the three built-in English phrases.
                 WAKE_WORD_RESPONSES = _parsed
     except Exception:
         pass
@@ -175,8 +179,28 @@ class STTManager:
         self.wake_silence_threshold = None
         self.silence_threshold = None  # Updated after measuring background noise
         self.silence_threshold_margin = None
-        self.MAX_RECORDING_FRAMES = 100   # ~12.5 seconds
-        self.MAX_SILENT_FRAMES = CONFIG['STT']['speechdelay']
+        # 100 ms chunks give VAD/Smart Turn enough resolution for natural
+        # conversation. The previous 250 ms chunks added coarse latency and
+        # made the five-frame minimum reject utterances shorter than 1.25 s.
+        self.RECORDING_CHUNK_FRAMES = 1600
+        self.RECORDING_CHUNK_SECONDS = self.RECORDING_CHUNK_FRAMES / self.MODEL_RATE
+        self.MAX_RECORDING_FRAMES = math.ceil(25 / self.RECORDING_CHUNK_SECONDS)
+
+        # Older TARS releases used speechdelay for both waiting-for-speech and
+        # end-of-turn detection.  Those are different jobs: a user may need a
+        # few seconds to begin, but once speech ends the assistant should react
+        # quickly.  Keep the legacy frame count as a fallback for old configs.
+        legacy_silent_frames = int(CONFIG['STT']['speechdelay'])
+        listen_timeout = float(CONFIG['STT'].get('listen_timeout', 0.0) or 0.0)
+        silence_timeout = float(CONFIG['STT'].get('silence_timeout', 0.0) or 0.0)
+        self.PRE_SPEECH_TIMEOUT_FRAMES = (
+            max(1, math.ceil(listen_timeout / self.RECORDING_CHUNK_SECONDS))
+            if listen_timeout > 0 else legacy_silent_frames
+        )
+        self.MAX_SILENT_FRAMES = (
+            max(1, math.ceil(silence_timeout / self.RECORDING_CHUNK_SECONDS))
+            if silence_timeout > 0 else legacy_silent_frames
+        )
 
         # Callbacks
         self.wake_word_callback: Optional[Callable[[str], None]] = None
@@ -199,7 +223,9 @@ class STTManager:
         # Smart Turn semantic turn detection
         self.smart_turn_session = None
         self.smart_turn_extractor = None
-        self.smart_turn_audio_buffer = deque(maxlen=32)
+        self.smart_turn_audio_buffer = deque(
+            maxlen=math.ceil(8 / self.RECORDING_CHUNK_SECONDS)
+        )
         self._smart_turn_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="SmartTurn")
         self._smart_turn_future = None  # pending inference Future
         self._smart_turn_last_buf_len = 0  # buffer size at last inference submission
@@ -226,6 +252,7 @@ class STTManager:
 
         # Last recorded audio for speaker ID (set by transcription backends)
         self._last_audio_float32 = None
+        self._pending_wake_trace = {"engine": "unknown"}
 
         # Cache progress bar, webui port, and character name so they aren't recreated per frame
         self._progress_bar_funcs = None
@@ -272,6 +299,7 @@ class STTManager:
         if vad_method == "sherpa-onnx":
             self._load_sherpa_vad()
         elif vad_method == "smart-turn":
+            self._load_sherpa_vad()
             self._load_smart_turn()
 
         # Load optional sherpa-onnx denoiser
@@ -325,7 +353,11 @@ class STTManager:
             return
         atomik_mode = CONFIG['STT'].get('atomik_mode', 'auto').strip().lower()
         mode = None if atomik_mode == 'auto' else atomik_mode
-        WakeWordSystem(self.WAKE_WORD, mode=mode).createModel()
+        detector = WakeWordSystem(self.WAKE_WORD, mode=mode)
+        detector.vad.energy_threshold = float(
+            CONFIG['STT'].get('atomik_energy_threshold', 0.008)
+        )
+        detector.createModel()
 
     def _load_silero_model(self):
         """Load Silero STT model via Torch Hub into the stt folder."""
@@ -410,7 +442,7 @@ class STTManager:
 
             vad_config = sherpa_onnx.VadModelConfig()
             vad_config.silero_vad.model = model_path
-            vad_config.silero_vad.threshold = 0.3
+            vad_config.silero_vad.threshold = 0.5
             vad_config.silero_vad.min_speech_duration = 0.1
             vad_config.silero_vad.min_silence_duration = 0.3
             vad_config.sample_rate = 16000
@@ -572,20 +604,41 @@ class STTManager:
         pre_roll_added = 0
         audio_chunks = []
         max_silent = self.MAX_SILENT_FRAMES
+        max_pre_speech = self.PRE_SPEECH_TIMEOUT_FRAMES
+        record_started = time.perf_counter()
+        record_deadline = record_started + self.MAX_RECORDING_FRAMES * self.RECORDING_CHUNK_SECONDS
+        listen_deadline = record_started + max_pre_speech * self.RECORDING_CHUNK_SECONDS
+        speech_started_at = None
+        exit_reason = "max_duration"
+        voice_trace.event(
+            "recording_started",
+            listen_timeout_ms=round(max_pre_speech * self.RECORDING_CHUNK_SECONDS * 1000),
+            silence_timeout_ms=round(max_silent * self.RECORDING_CHUNK_SECONDS * 1000),
+        )
 
         # Select VAD method — resolve once, not per frame
         if vad_method is None:
             vad_method = self.vadmethod
+        if vad_method == "smart-turn" and self.sherpa_vad is None:
+            queue_message("ERROR: Smart Turn requires Silero speech VAD; refusing noise-only RMS fallback")
+            voice_trace.finish("recording_aborted", reason="speech_vad_unavailable")
+            return None, 0
         vad_dispatch = {
             "silero": self._is_silence_detected_silero,
             "sherpa-onnx": self._is_silence_detected_sherpa_onnx,
-            "smart-turn": self._is_silence_detected_smart_turn if self.smart_turn_session is not None else self._is_silence_detected_rms,
+            "smart-turn": self._is_silence_detected_smart_turn,
         }
         vad_func = vad_dispatch.get(vad_method, self._is_silence_detected_rms)
 
         # Reset Smart Turn state to prevent stale inference from previous round
         self.smart_turn_audio_buffer.clear()
+        if self._smart_turn_future is not None:
+            self._smart_turn_future.cancel()
         self._smart_turn_future = None
+        self._smart_turn_last_buf_len = 0
+        self._frame_is_speech = False
+        if self.sherpa_vad is not None:
+            self.sherpa_vad.reset()
 
         with ResamplingInputStream(dtype="int16") as mic:
             # Flush stale mic audio that may contain the robot's own TTS voice.
@@ -599,25 +652,47 @@ class STTManager:
                 pass
 
             for _ in range(self.MAX_RECORDING_FRAMES):
-                data, _ = mic.read(4000)
+                if self.shutdown_event.is_set() or self.is_paused() or self.is_cancelled():
+                    voice_trace.finish("recording_aborted", reason="cancelled")
+                    return None, 0
+                if time.perf_counter() >= record_deadline or (
+                    not detected_speech and time.perf_counter() >= listen_deadline
+                ):
+                    voice_trace.finish("recording_aborted", reason="wall_clock_timeout")
+                    return None, 0
+                data, overflow = mic.read(self.RECORDING_CHUNK_FRAMES)
+                if overflow or time.perf_counter() >= record_deadline:
+                    voice_trace.finish("recording_aborted", reason="audio_read_timeout")
+                    return None, 0
 
                 # Abort recording if TTS just started — don't pick up TARS's own voice
                 if is_tts_playing():
                     set_tars_state(TarsState.STANDBY)
+                    voice_trace.finish("recording_aborted", reason="tts_started")
                     return None, 0
 
                 is_silence, detected_speech, silent_frames = vad_func(data, detected_speech, silent_frames)
 
                 # Pre-speech timeout: if no speech detected and silence exceeds threshold, exit early
-                if not detected_speech and silent_frames >= max_silent:
+                if detected_speech and speech_started_at is None:
+                    speech_started_at = time.perf_counter()
+                    voice_trace.event("speech_started")
+
+                if not detected_speech and silent_frames >= max_pre_speech:
                     _, clear_bar = self._get_progress_bar()
                     clear_bar()
+                    voice_trace.finish(
+                        "recording_finished",
+                        reason="no_speech",
+                        duration_ms=round((time.perf_counter() - record_started) * 1000),
+                    )
                     return None, 0
 
                 # Post-speech: VAD signaled end of turn
                 if is_silence and detected_speech and speech_frames >= min_speech_frames:
                     _, clear_bar = self._get_progress_bar()
                     clear_bar()
+                    exit_reason = "end_of_turn"
                     break
 
                 # Smart Turn early exit — buffer is empty when inference signaled turn-complete
@@ -625,6 +700,7 @@ class STTManager:
                 if (is_silence and active_vad == "smart-turn" and speech_frames >= min_speech_frames
                         and silent_frames >= 3 and not self.smart_turn_audio_buffer):
                     queue_message("INFO: Smart Turn detected end of turn")
+                    exit_reason = "smart_turn"
                     break
 
                 if not detected_speech:
@@ -638,20 +714,38 @@ class STTManager:
                         audio_chunks.extend(pre_roll_buffer)
                         pre_roll_buffer = []
                     audio_chunks.append(data)
-                    if not is_silence:
+                    if (self._frame_is_speech if active_vad == "smart-turn" else not is_silence):
                         speech_frames += 1
             else:
                 # Loop completed without break
                 if speech_frames < min_speech_frames:
+                    voice_trace.finish(
+                        "recording_finished",
+                        reason="insufficient_speech",
+                        duration_ms=round((time.perf_counter() - record_started) * 1000),
+                    )
                     return None, 0
 
         if speech_frames < min_speech_frames or not audio_chunks:
+            voice_trace.finish(
+                "recording_finished",
+                reason="insufficient_speech",
+                duration_ms=round((time.perf_counter() - record_started) * 1000),
+            )
             return None, 0
         # Stash float32 audio for speaker ID — exclude pre-roll chunks which
         # may contain TARS's own TTS response (using the user's voice model),
         # contaminating the speaker embedding with the wrong voice.
         speech_only = audio_chunks[pre_roll_added:] if pre_roll_added else audio_chunks
         self._last_audio_float32 = self._chunks_to_float32(speech_only) if speech_only else self._chunks_to_float32(audio_chunks)
+        audio_samples = sum(len(chunk) for chunk in audio_chunks)
+        voice_trace.event(
+            "recording_finished",
+            reason=exit_reason,
+            duration_ms=round((time.perf_counter() - record_started) * 1000),
+            audio_ms=round(audio_samples / self.MODEL_RATE * 1000),
+            speech_frames=speech_frames,
+        )
         return audio_chunks, speech_frames
 
     def _chunks_to_wav_buffer(self, chunks, sample_rate):
@@ -698,6 +792,7 @@ class STTManager:
         result = {"text": text}
         if extra:
             result.update(extra)
+        voice_trace.event("utterance_dispatched", chars=len(text))
         if self.utterance_callback:
             self.utterance_callback(json.dumps(result))
         return result
@@ -748,6 +843,9 @@ class STTManager:
             if self.is_paused():
                 return None
 
+            if not voice_trace.is_active():
+                voice_trace.begin(source="followup")
+
             processors = {
                 "fastrtc": self._transcribe_with_fastrtc,
                 "silero": self._transcribe_silero,
@@ -775,9 +873,14 @@ class STTManager:
 
             if self.post_utterance_callback and result:
                 self.post_utterance_callback()
+            elif not result:
+                voice_trace.finish("turn_abandoned", reason="no_transcription")
             return result
         except Exception as e:
             queue_message(f"ERROR: Transcription failed: {e}")
+            voice_trace.finish(
+                "turn_failed", component="transcription", error=type(e).__name__
+            )
             return None
 
     # === Wake Word Gates ===
@@ -1018,9 +1121,10 @@ class STTManager:
         return None
 
     def _transcribe_with_openai(self):
-        """Transcribe and translate audio using OpenAI's Whisper API."""
+        """Transcribe a completed turn using the configured OpenAI STT model."""
         language = CONFIG['STT']['language']
         client = OpenAI(api_key=CONFIG["TTS"]["openai_api_key"])
+        model = CONFIG['STT'].get('openai_stt_model', 'whisper-1')
 
         RATE = 16000
         chunks, speech_frames = self._record_audio_chunks()
@@ -1046,8 +1150,32 @@ class STTManager:
 
         try:
             with open(tmp_path, 'rb') as f:
-                response = client.audio.transcriptions.create(
-                    model="whisper-1", file=f, response_format="verbose_json"
+                language_code = {
+                    "spanish": "es",
+                    "español": "es",
+                    "english": "en",
+                    "anglais": "en",
+                }.get((language or "").strip().lower())
+                request_started = time.perf_counter()
+                voice_trace.event(
+                    "stt_request_started",
+                    model=model,
+                    audio_ms=round(len(audio_data) / RATE * 1000),
+                )
+                request = {
+                    "model": model,
+                    "file": f,
+                    "response_format": (
+                        "verbose_json" if model == "whisper-1" else "json"
+                    ),
+                }
+                if language_code:
+                    request["language"] = language_code
+                response = client.audio.transcriptions.create(**request)
+                voice_trace.event(
+                    "stt_response_received",
+                    model=model,
+                    request_ms=round((time.perf_counter() - request_started) * 1000),
                 )
         finally:
             os.unlink(tmp_path)
@@ -1064,19 +1192,10 @@ class STTManager:
 
         transcription = response.text.strip() if hasattr(response, 'text') else ""
         if not transcription:
+            voice_trace.finish("stt_empty", model=model)
             return None
 
-        # Translate to target language if not English
-        if language and language.lower() not in ("english", "anglais"):
-            translation = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": f"Translate the following text to {language}. Only provide the translation, nothing else."},
-                    {"role": "user", "content": transcription}
-                ]
-            )
-            transcription = translation.choices[0].message.content
-
+        voice_trace.event("transcription_ready", chars=len(transcription))
         return self._emit_result(transcription)
 
     def _sherpa_transcribe_audio(self, audio_chunks, sample_rate=16000):
@@ -1338,13 +1457,22 @@ class STTManager:
 
     def _handle_wake_detected(self):
         """Common actions after wake word is detected: beep, notify UI, send response."""
+        voice_trace.begin(source="wake_word", **self._pending_wake_trace)
         if self.config["STT"].get("use_indicators"):
+            voice_trace.event("wake_indicator_started")
             self.play_wav(os.path.join(_stt_dir(), "beep_on.wav"))
+            voice_trace.event("wake_indicator_finished")
         self._fire_and_forget_get(f"http://127.0.0.1:{self._webui_port}/start_talking")
         if self.WAKE_WORD_RESPONSES:
             wake_response = random.choice(self.WAKE_WORD_RESPONSES)
             if self.wake_word_callback:
+                voice_trace.event("wake_response_started")
                 self.wake_word_callback(wake_response)
+                voice_trace.event("wake_response_finished")
+        else:
+            # A silent/local indicator activation must still enter listening
+            # state; previously only the spoken response callback did this.
+            set_tars_state(TarsState.LISTENING)
 
     def _detect_wake_word_fastrtc(self) -> bool:
         """Detect the wake word using FastRTC STT by transcribing short audio chunks."""
@@ -1408,6 +1536,10 @@ class STTManager:
                 if self.WAKE_WORD in transcript:
                     if not self._run_wake_gates(audio_data, transcript_verify_fn=transcript_verify_fn):
                         continue
+                    self._pending_wake_trace = {
+                        "engine": "fastrtc",
+                        "wake_transcript": transcript[:80],
+                    }
                     self._handle_wake_detected()
                     return True
 
@@ -1419,7 +1551,12 @@ class STTManager:
         atomik_mode = CONFIG['STT'].get('atomik_mode', 'auto').strip().lower()
         mode = None if atomik_mode == 'auto' else atomik_mode
 
-        if atomik_mode == 'template':
+        configured_threshold = str(
+            CONFIG['STT'].get('atomik_similarity_threshold', '')
+        ).strip()
+        if configured_threshold:
+            threshold = max(0.0, min(float(configured_threshold), 1.0))
+        elif atomik_mode == 'template':
             # Template mode: cosine similarity scores range ~0.4-0.9
             # Higher sensitivity = lower threshold = easier to trigger
             # sens 1 → 0.70, sens 5 → 0.55, sens 10 → 0.40
@@ -1438,16 +1575,67 @@ class STTManager:
             transcript_verify_fn = self._build_transcript_verify_fn()
 
         detector = WakeWordSystem(self.WAKE_WORD, self.MODEL_RATE, threshold, debug=self.DEBUG, mode=mode)
+        detector.vad.energy_threshold = float(
+            CONFIG['STT'].get('atomik_energy_threshold', 0.008)
+        )
         detector.createModel()
         # Wait for TTS to finish before entering blocking wake word listener
         while is_tts_playing():
             time.sleep(0.05)
+        last_probe_log = [0.0]
+
+        def _log_score_probe(detected, score, metrics):
+            """Rate-limited score telemetry; never stores microphone audio."""
+            now = time.monotonic()
+            if detected or score < max(0.10, threshold * 0.5):
+                return
+            if now - last_probe_log[0] < 2.0:
+                return
+            last_probe_log[0] = now
+            payload = {
+                "engine": "atomik-template" if detector._mode == detector.MODE_TEMPLATE else "atomik-model",
+                "score": round(float(score), 3),
+                "threshold": round(float(threshold), 3),
+            }
+            payload.update({
+                key: round(float(value), 5)
+                for key, value in (metrics or {}).items()
+                if isinstance(value, (int, float))
+            })
+            queue_message(
+                "WAKE_SCORE: "
+                + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            )
+
         while True:
-            detector.listenForWakeWord()
-            audio_window = np.array(list(detector.buffer)[-int(self.MODEL_RATE * 2):], dtype=np.float32)
+            detector.listenForWakeWord(score_callback=_log_score_probe)
+            audio_window = detector.last_detection_audio
+            if audio_window is None:
+                audio_window = np.array(
+                    list(detector.buffer)[-int(self.MODEL_RATE):], dtype=np.float32
+                )
+            candidate = {
+                "engine": "atomik-template" if detector._mode == detector.MODE_TEMPLATE else "atomik-model",
+                "score": round(float(detector.last_score), 3),
+                "threshold": round(float(threshold), 3),
+            }
+            candidate.update({
+                key: round(float(value), 5)
+                for key, value in detector.last_detection_metrics.items()
+                if isinstance(value, (int, float))
+            })
+            queue_message(
+                "WAKE_CANDIDATE: "
+                + json.dumps(candidate, ensure_ascii=False, separators=(",", ":"))
+            )
             if self._run_wake_gates(audio_window, transcript_verify_fn=transcript_verify_fn):
+                self._pending_wake_trace = candidate
                 self._handle_wake_detected()
                 return True
+            queue_message(
+                "WAKE_REJECTED: "
+                + json.dumps(candidate, ensure_ascii=False, separators=(",", ":"))
+            )
 
     def _detect_wake_word_sherpa_onnx(self) -> bool:
         """Detect wake word using sherpa-onnx with a pre-allocated circular buffer."""
@@ -1532,6 +1720,10 @@ class STTManager:
                     # plays TTS audio (sd.play + sd.wait) which deadlocks if
                     # the ResamplingInputStream is still open.
                     wake_detected = True
+                    self._pending_wake_trace = {
+                        "engine": "sherpa-onnx",
+                        "wake_transcript": transcript[:80],
+                    }
                     break
 
                 # Roll buffer: shift overlap to front, read new frames into remainder
@@ -1563,6 +1755,8 @@ class STTManager:
 
     @staticmethod
     def _fire_and_forget_get(url):
+        if not CONFIG["ACCESS"].get("webui_enabled", True):
+            return
         threading.Thread(target=lambda: requests.get(url, timeout=1), daemon=True).start()
 
     # === Progress Bar ===
@@ -1688,6 +1882,8 @@ class STTManager:
         max_samples = 8 * 16000
         if len(audio) > max_samples:
             audio = audio[-max_samples:]
+        elif len(audio) < max_samples:
+            audio = np.pad(audio, (max_samples - len(audio), 0))
         inputs = self.smart_turn_extractor(
             audio, sampling_rate=16000, return_tensors="np",
             padding="max_length", max_length=max_samples,
@@ -1702,30 +1898,31 @@ class STTManager:
         return prob
 
     def _is_silence_detected_smart_turn(self, data, detected_speech, silent_frames):
-        """Hybrid RMS + Smart Turn semantic turn detection.
+        """Silero speech detection + Smart Turn semantic turn detection.
 
-        Uses RMS to detect per-frame silence, then runs the Smart Turn model
+        Uses Silero to detect speech, then runs the Smart Turn model
         asynchronously on accumulated audio during pauses to determine if the
         speaker has finished their turn (vs just pausing mid-sentence).
         Inference runs in a background thread so it never blocks audio reads.
         """
         update_bar, clear_bar = self._get_progress_bar()
         try:
-            if self.smart_turn_session is None or self.smart_turn_extractor is None:
-                return self._is_silence_detected_rms(data, detected_speech, silent_frames)
+            if self.sherpa_vad is None:
+                raise RuntimeError("Silero speech VAD is unavailable")
+            audio = data.astype(np.float32).flatten() / 32768.0
+            self.sherpa_vad.accept_waveform(audio)
+            self._frame_is_speech = bool(self.sherpa_vad.is_speech_detected())
+            while not self.sherpa_vad.empty():
+                self.sherpa_vad.pop()
+            # Preserve real timing, including pauses, for semantic inference.
+            self.smart_turn_audio_buffer.append(audio)
 
-            # RMS check on current frame
-            rms = self._compute_rms_fast(data)
-            if self.silence_threshold_margin is None:
-                self.silence_threshold_margin = self.silence_threshold
-            if rms is None:
-                return False, detected_speech, silent_frames
-
-            if rms > self.silence_threshold_margin:
+            if self._frame_is_speech:
                 # Speech detected — accumulate audio and cancel any pending inference
                 detected_speech = True
                 silent_frames = 0
-                self.smart_turn_audio_buffer.append(data.astype(np.float32).flatten() / 32768.0)
+                if self._smart_turn_future is not None:
+                    self._smart_turn_future.cancel()
                 self._smart_turn_future = None  # discard stale result if speaker resumed
                 self._smart_turn_last_buf_len = 0  # reset cache so next silence triggers inference
                 clear_bar()
@@ -1739,6 +1936,8 @@ class STTManager:
             if silent_frames > self.MAX_SILENT_FRAMES:
                 clear_bar()
                 self.smart_turn_audio_buffer.clear()
+                if self._smart_turn_future is not None:
+                    self._smart_turn_future.cancel()
                 self._smart_turn_future = None
                 return True, detected_speech, silent_frames
 
@@ -1762,6 +1961,8 @@ class STTManager:
             # Kick off inference if not already running and buffer has new audio
             _cur_buf_len = len(self.smart_turn_audio_buffer)
             if (silent_frames >= 3 and detected_speech
+                    and self.smart_turn_session is not None
+                    and self.smart_turn_extractor is not None
                     and self.smart_turn_audio_buffer
                     and self._smart_turn_future is None
                     and _cur_buf_len != self._smart_turn_last_buf_len):
@@ -1776,10 +1977,10 @@ class STTManager:
             return False, detected_speech, silent_frames
 
         except Exception as e:
-            queue_message(f"WARNING: Smart Turn VAD error, falling back to RMS: {e}")
+            queue_message(f"ERROR: Speech/turn detection failed: {e}")
             self.smart_turn_audio_buffer.clear()
             self._smart_turn_future = None
-            return self._is_silence_detected_rms(data, detected_speech, silent_frames)
+            raise
 
     # === Background Noise Measurement ===
 
@@ -1802,7 +2003,13 @@ class STTManager:
             q1, q3 = np.percentile(bg_rms, [25, 75])
             iqr = q3 - q1
             filtered = bg_rms[(bg_rms >= q1 - 1.5 * iqr) & (bg_rms <= q3 + 1.5 * iqr)]
-            self.wake_silence_threshold = np.max(filtered) if filtered.size > 0 else np.median(bg_rms)
+            # Use a robust upper-background estimate. Taking the maximum made
+            # a single USB startup pulse raise the threshold above normal speech.
+            self.wake_silence_threshold = (
+                np.percentile(filtered, 75)
+                if filtered.size > 0
+                else np.median(bg_rms)
+            )
             self.silence_threshold = self.wake_silence_threshold * self.silence_margin
             self.silence_threshold_margin = self.silence_threshold
             db = 20 * np.log10(self.silence_threshold) if self.silence_threshold > 0 else -999

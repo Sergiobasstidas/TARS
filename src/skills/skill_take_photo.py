@@ -43,11 +43,15 @@ def execute(parameters, context):
         f.write(_b64.b64decode(b64))
     queue_message(f"Photo saved: {filepath}")
 
-    # Display on RPi screen
+    # Display only when an on-device UI actually exists. Importing the display
+    # stack on a headless Pi pulls in Pygame/OpenCV unnecessarily.
     try:
-        from modules.module_stablediffusion import display_image_fullscreen
-        threading.Thread(target=display_image_fullscreen, args=(filepath,)).start()
+        from modules.module_config import load_config
+        config = load_config()
+        if config.get("UI", {}).get("UI_enabled", False):
+            from modules.module_stablediffusion import display_image_fullscreen
+            threading.Thread(target=display_image_fullscreen, args=(filepath,)).start()
     except Exception as e:
         queue_message(f"WARN: Could not display photo: {e}")
 
-    return f"Photo saved! Got it as {filename}."
+    return f"Foto guardada como {filename}."

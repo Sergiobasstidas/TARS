@@ -208,8 +208,16 @@ class _AudioHub:
 
         No locks, no allocations beyond indata.copy(). Reads atomic snapshots.
         """
-        # Single memcpy — required because PA reuses the indata buffer
-        chunk = indata.copy()
+        # Some USB interfaces, including Waveshare USB TO AUDIO, expose their
+        # microphones as a native two-channel capture device. Open both native
+        # channels and downmix here so downstream consumers always receive mono.
+        if indata.ndim == 2 and indata.shape[1] > 1:
+            chunk = np.mean(indata, axis=1, keepdims=True).astype(
+                indata.dtype, copy=False
+            )
+        else:
+            # Single memcpy — required because PA reuses the input buffer.
+            chunk = indata.copy()
 
         # Dispatch to callback consumers
         for cb in self._cb_snapshot:
@@ -234,7 +242,12 @@ class _AudioHub:
             return
         idx, rate = get_device_info()
         self._native_rate = rate
-        kwargs = dict(samplerate=rate, channels=1, callback=self._on_audio)
+        channels = 1
+        if idx is not None and idx >= 0:
+            info = sd.query_devices(idx, kind="input")
+            if int(info.get("max_input_channels", 1)) >= 2:
+                channels = 2
+        kwargs = dict(samplerate=rate, channels=channels, callback=self._on_audio)
         if idx is not None and idx >= 0:
             kwargs["device"] = idx
         self._stream = sd.InputStream(**kwargs)
@@ -333,6 +346,7 @@ class _AudioHub:
 
         collected = []
         remaining = n_native_frames
+        deadline = time.monotonic() + 1.0
 
         while remaining > 0:
             # Drain available chunks
@@ -356,7 +370,7 @@ class _AudioHub:
                 evt.clear()
                 if buf:
                     continue  # data arrived between drain loop and clear
-                if not evt.wait(timeout=5.0):
+                if not evt.wait(timeout=max(0.0, deadline - time.monotonic())):
                     # Timeout — return what we have padded with silence
                     target_dtype = np.int16 if dtype == "int16" else np.float32
                     if collected:

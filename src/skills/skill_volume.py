@@ -2,6 +2,7 @@
 
 import subprocess
 import re
+import os
 
 SKILL = {
     "name": "volume",
@@ -26,14 +27,22 @@ Response: {{"reply": "Let me check.", "function_calls": [{{"function": "volume",
 class _VolumeControl:
     """Simple amixer-based volume control."""
 
-    def __init__(self, control='Master'):
-        self.control = control
+    def __init__(self, control=None, card=None):
+        self.control = control or os.getenv("TARS_AUDIO_CONTROL", "Master")
+        self.card = card or os.getenv("TARS_AUDIO_CARD", "").strip()
+
+    def _command(self, action, *args):
+        command = ["amixer"]
+        if self.card:
+            command.extend(["-c", self.card])
+        command.extend([action, self.control, *args])
+        return command
 
     def get_volume(self):
         """Get current volume as percentage (0-100)."""
         try:
             output = subprocess.check_output(
-                ['amixer', 'get', self.control],
+                self._command('get'),
                 stderr=subprocess.STDOUT
             ).decode('utf-8')
             match = re.search(r'\[(\d+)%\]', output)
@@ -53,7 +62,7 @@ class _VolumeControl:
             return False
         try:
             subprocess.check_call(
-                ['amixer', 'set', self.control, f'{percent}%'],
+                self._command('set', f'{percent}%'),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.STDOUT
             )

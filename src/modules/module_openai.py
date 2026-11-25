@@ -35,7 +35,21 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 def get_cache_filename(text):
     """Generate a cache filename based on text hash"""
     text_hash = hashlib.md5(text.encode('utf-8')).hexdigest()
-    return os.path.join(CACHE_DIR, f"openai_{text_hash}.mp3")
+    return os.path.join(CACHE_DIR, f"openai_{text_hash}.wav")
+
+
+def _create_speech(text):
+    return openai.audio.speech.create(
+        model="gpt-4o-mini-tts",
+        voice=VOICE,
+        input=text,
+        instructions=(
+            "Habla en español latino neutro con una voz masculina natural, cálida "
+            "y serena. Usa pausas orgánicas, entonación expresiva y humor seco "
+            "sutil cuando el texto lo permita. Evita el ritmo robótico."
+        ),
+        response_format="wav",
+    )
 
 async def text_to_speech_with_pipelining_openai(text, is_wakeword):
 
@@ -54,11 +68,7 @@ async def text_to_speech_with_pipelining_openai(text, is_wakeword):
                 queue_message(f"ERROR: Failed to load cache file: {e}")
         
         try:
-            response = openai.audio.speech.create(
-                model="tts-1",
-                voice=VOICE,
-                input=text
-            )
+            response = _create_speech(text)
 
             audio_bytes = response.read()
 
@@ -77,11 +87,7 @@ async def text_to_speech_with_pipelining_openai(text, is_wakeword):
             yield None
     else:
         try:
-            response = openai.audio.speech.create(
-                model="tts-1",
-                voice=VOICE,
-                input=text
-            )
+            response = _create_speech(text)
 
             audio_bytes = response.read()
             audio_buffer = io.BytesIO(audio_bytes)

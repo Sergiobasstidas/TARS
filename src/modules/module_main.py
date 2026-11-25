@@ -20,6 +20,7 @@ from modules.module_tts import play_audio_chunks, SentenceTTSPipeline
 from modules.module_messageQue import queue_message
 from modules.module_servoctl import initialize_servos
 from modules.module_state import set_tars_state, TarsState
+from modules import module_voice_trace as voice_trace
 
 CONFIG = load_config()
 CAPABILITIES = get_capabilities()
@@ -128,6 +129,7 @@ def utterance_callback(message):
             return
 
         user_text = message_dict['text'].strip()
+        voice_trace.event("llm_pipeline_started", input_chars=len(user_text))
 
         # Kick off memory embedding in background so it's ready by prompt-build time
         if memory_manager and memory_manager.long_mem_use and hasattr(memory_manager, 'prefetch_embedding'):
@@ -182,10 +184,15 @@ def utterance_callback(message):
 
         def _apply_sanitize(text):
             text = _sanitize_for_tts(text)
-            text = re.sub(r'[^a-zA-Z0-9\s.,?!;:"\'-<>]', '', text)
+            text = re.sub(
+                r'[^a-zA-Z0-9ÁÉÍÓÚÜÑáéíóúüñ\s.,¿?¡!;:"\'-<>]',
+                '',
+                text,
+            )
             return text.strip()
 
         def _on_first_play():
+            voice_trace.event("tts_first_audio")
             set_tars_state(TarsState.TALKING)
             if stt_manager:
                 stt_manager.start_bargein_monitor(tts_text="")
@@ -203,6 +210,8 @@ def utterance_callback(message):
 
         def on_reply_chunk(chunk, is_first):
             """Called from LLM streaming thread with each reply text piece."""
+            if is_first:
+                voice_trace.event("llm_first_token")
             _acc_raw[0] += chunk
 
             # Remove any completed <think>…</think> blocks from full raw text
@@ -247,12 +256,14 @@ def utterance_callback(message):
             parsed = preemptive
             llm_total_dur = 0.0
         else:
-            # Notify web UI that streaming is starting
-            try:
-                from modules.module_chatui import begin_bot_stream
-                begin_bot_stream()
-            except Exception:
-                pass
+            # Notify web UI only when it is actually enabled. Importing the
+            # module in headless mode also initializes its Wi-Fi manager.
+            if _is_webui:
+                try:
+                    from modules.module_chatui import begin_bot_stream
+                    begin_bot_stream()
+                except Exception:
+                    pass
 
             pipeline.start()
             llm_mod._reply_chunk_callback = on_reply_chunk
@@ -264,8 +275,13 @@ def utterance_callback(message):
             try:
                 stt_to_llm_dur = speed.stop('stt_to_llm')
                 speed.start('llm_total')
+                voice_trace.event("llm_request_started")
                 parsed = process_completion(user_text)
                 llm_total_dur = speed.stop('llm_total')
+                voice_trace.event(
+                    "llm_response_completed",
+                    request_ms=round(llm_total_dur * 1000) if llm_total_dur else None,
+                )
                 # Refresh UI display name now that speaker ID has resolved
                 try:
                     from modules.module_prompt import _get_active_user_name
@@ -300,6 +316,7 @@ def utterance_callback(message):
                 except Exception:
                     pass
             set_tars_state(TarsState.LISTENING)
+            voice_trace.finish("turn_failed", component="llm", reason="empty_response")
             return
 
         # Extract the final reply text for post-processing (emotion, display)
@@ -326,7 +343,7 @@ def utterance_callback(message):
                 # else: LLM response wasn't valid JSON — skip emotion silently
             else:
                 emotion, emotion_raw, axis_scores = detect_emotion(user_text)
-            if emotion:
+            if emotion and _is_webui:
                 try:
                     from modules.module_chatui import update_emotion
                     update_emotion(emotion)
@@ -411,6 +428,10 @@ def utterance_callback(message):
             if stt_manager:
                 stt_manager.stop_bargein_monitor()
             was_interrupted = pipeline.interrupted
+        voice_trace.event(
+            "tts_finished",
+            interrupted=bool(was_interrupted),
+        )
 
         # Speak follow-up if side effects produced new content (vision result, search summary)
         queue_message(f"DEBUG VOICE: followup_reply={'yes' if _followup_reply else 'no'}, was_interrupted={was_interrupted}")
@@ -472,7 +493,7 @@ def utterance_callback(message):
             f"speaker={speaker}",
             f"emotion={emotion or '?'}",
             f"preemptive={'yes' if preemptive is not None else 'no'}",
-            f"end={'barge-in' if was_interrupted else 'timeout'}",
+            f"end={'barge-in' if was_interrupted else 'completed'}",
         ]
         queue_message(f"ROUND: {' | '.join(parts)}")
 
@@ -523,11 +544,21 @@ def utterance_callback(message):
             sp.append(f"total({speed.fmt(total_dur)})")
             queue_message(f"SPEED: {', '.join(sp)}")
 
+        voice_trace.finish(
+            "turn_complete",
+            interrupted=bool(was_interrupted),
+            output_chars=len(reply or ""),
+        )
+
     except json.JSONDecodeError:
         queue_message("ERROR: Invalid JSON format. Could not process user message.")
+        voice_trace.finish("turn_failed", component="message_parse")
     except Exception as e:
         set_tars_state(TarsState.LISTENING)
         queue_message(f"ERROR: {e}")
+        voice_trace.finish(
+            "turn_failed", component="response_pipeline", error=type(e).__name__
+        )
 
 def post_utterance_callback():
     """

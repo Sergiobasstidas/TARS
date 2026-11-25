@@ -486,6 +486,8 @@ async def play_audio_chunks(text, config, is_wakeword=False, emotion=None):
 
     def _notify_talking_state(endpoint):
         """Fire-and-forget HTTP notification to webui (non-blocking)."""
+        if not CONFIG["ACCESS"].get("webui_enabled", True):
+            return
         try:
             requests.get(f"http://127.0.0.1:{CONFIG['ACCESS'].get('webui_port', 80)}/{endpoint}", timeout=1)
         except Exception:

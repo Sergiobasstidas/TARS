@@ -1,5 +1,7 @@
 import base64
 import os
+import shutil
+import subprocess
 import threading
 from io import BytesIO
 import requests
@@ -94,6 +96,49 @@ def _to_bytes(image_data):
     if isinstance(image_data, (bytes, bytearray)):
         return bytes(image_data)
     return base64.b64decode(image_data)
+
+
+def _capture_rpicam_bytes():
+    """Capture one JPEG with Raspberry Pi's supported headless camera tool."""
+    executable = shutil.which("rpicam-still")
+    if not executable:
+        raise RuntimeError("rpicam-still is not installed")
+
+    width = max(320, int(CONFIG['VISION'].get('capture_width', 1536)))
+    height = max(240, int(CONFIG['VISION'].get('capture_height', 864)))
+    timeout_ms = max(500, int(CONFIG['VISION'].get('capture_timeout_ms', 2500)))
+    quality = max(1, min(100, int(CONFIG['VISION'].get('capture_quality', 85))))
+    rotation = int(CONFIG['VISION'].get('camera_rotation', 0))
+
+    command = [
+        executable,
+        "--nopreview",
+        "--timeout", str(timeout_ms),
+        "--width", str(width),
+        "--height", str(height),
+        "--encoding", "jpg",
+        "--quality", str(quality),
+        "--autofocus-mode", "auto",
+        "--output", "-",
+    ]
+    # rpicam supports sensor-safe 0/180 degree transforms. The Wide camera is
+    # physically upright in Enzo, so the headless profile uses zero rotation.
+    if rotation in (0, 180):
+        command.extend(["--rotation", str(rotation)])
+
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=(timeout_ms / 1000) + 10,
+    )
+    if completed.returncode != 0:
+        details = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(details.rsplit("\n", 1)[-1] or "camera capture failed")
+    if not completed.stdout.startswith(b"\xff\xd8"):
+        raise RuntimeError("rpicam-still did not return a valid JPEG")
+    return completed.stdout
 
 
 # --- Backend implementations ---
@@ -266,9 +311,17 @@ def capture_camera_base64():
     """Capture from camera and return base64 string. Returns (b64, None) or (None, error)."""
     if not CONFIG['VISION'].get('enabled', False):
         return None, "Error: Vision is not enabled"
-    if CameraModule is None:
-        return None, "Error: Camera module not available"
+
+    backend = str(CONFIG['VISION'].get('camera_backend', 'auto')).strip().lower()
     try:
+        if backend in ("auto", "rpicam") and shutil.which("rpicam-still"):
+            return _to_base64(_capture_rpicam_bytes()), None
+
+        if backend == "rpicam":
+            return None, "Error: rpicam-still is not installed"
+        if CameraModule is None:
+            return None, "Error: Camera module not available"
+
         camera = CameraModule(1920, 1080)
         image_bytes = camera.capture_bytes()
         return _to_base64(image_bytes), None
